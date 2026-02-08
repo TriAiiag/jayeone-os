@@ -4,12 +4,10 @@ import gspread
 from google.oauth2.service_account import Credentials
 
 # --- 1. SETUP ---
-FARM_NAME = "Jayeone Farms OS"
-st.set_page_config(page_title=FARM_NAME, page_icon="🌱", layout="wide")
+st.set_page_config(page_title="Jayeone Farms OS", page_icon="🌱", layout="wide")
 
-# --- 2. THE ENGINE ---
+# --- 2. ENGINE ---
 def get_gspread_client():
-    # Authenticates using fixed Secrets
     creds_dict = st.secrets["gspread_credentials"]
     scopes = ["https://www.googleapis.com/auth/spreadsheets"]
     creds = Credentials.from_service_account_info(creds_dict, scopes=scopes)
@@ -18,47 +16,42 @@ def get_gspread_client():
 @st.cache_data(ttl=60)
 def fetch_data(sid, gid):
     url = f"https://docs.google.com/spreadsheets/d/{sid}/export?format=csv&gid={gid}"
-    # Loads and immediately removes rows that are entirely empty
-    return pd.read_csv(url).dropna(how='all')
+    return pd.read_csv(url)
 
 try:
     sid = st.secrets["SHEET_ID"].strip()
-    page = st.sidebar.radio("Dashboard:", ["Orders", "Catalogue", "Stock Status"])
-    st.title(f"🌱 {FARM_NAME}")
+    page = st.sidebar.radio("Dashboard:", ["Orders", "Catalogue", "Stock"])
 
     if page == "Orders":
         st.subheader("📦 Incoming Orders")
         raw_df = fetch_data(sid, "0")
         
-        # --- THE CLEANUP ENGINE ---
-        # 1. Removes all rows where the first column (Order_ID) is empty
-        display_df = raw_df[raw_df.iloc[:, 0].notna()].copy()
+        # --- THE CLEANUP LAYER ---
+        # 1. Strip hidden spaces and drop unwanted columns
+        raw_df.columns = raw_df.columns.str.strip()
+        display_df = raw_df.drop(columns=["Packed/Dispatched", "Status", "Timestamp"], errors='ignore')
         
-        # 2. Specifically drops columns you don't want visible
-        cols_to_drop = ["Packed/Dispatched", "Status", "Timestamp", "packed/dispatched"]
-        display_df = display_df.drop(columns=[c for c in cols_to_drop if c in display_df.columns], errors='ignore')
+        # 2. Kill the 'None' rows (If first column is empty, hide the row)
+        display_df = display_df[display_df.iloc[:, 0].notna()].copy()
 
-        # Interactive Table
+        # THE INTERACTIVE EDITOR
         edited_df = st.data_editor(display_df, width="stretch", hide_index=True)
 
-        if st.button("💾 Save Changes to Digital Fortress"):
-            with st.spinner("Syncing with Jayeone Cloud..."):
+        if st.button("💾 Save to Google Sheet"):
+            with st.spinner("Writing to Digital Fortress..."):
                 client = get_gspread_client()
                 sh = client.open_by_key(sid)
-                # Matches your exact tab 'ORDERS'
                 worksheet = sh.worksheet("ORDERS") 
-                # Overwrites only the active data area
+                # Updates the sheet with cleaned data
                 worksheet.update([edited_df.columns.values.tolist()] + edited_df.values.tolist())
-                st.success("✅ Dashboard Updated!")
+                st.success("✅ Changes Saved!")
                 st.cache_data.clear()
 
     elif page == "Catalogue":
-        # Pulls from GID 1608295230
-        st.dataframe(fetch_data(sid, "1608295230"), width="stretch", hide_index=True)
+        st.dataframe(fetch_data(sid, "1608295230").dropna(how='all'), width="stretch", hide_index=True)
 
-    elif page == "Stock Status":
-        # Pulls from GID 1277793309
-        st.dataframe(fetch_data(sid, "1277793309"), width="stretch", hide_index=True)
+    elif page == "Stock":
+        st.dataframe(fetch_data(sid, "1277793309").dropna(how='all'), width="stretch", hide_index=True)
 
 except Exception as e:
-    st.error(f"System Error: {e}")
+    st.error(f"⚠️ {e}")
