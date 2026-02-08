@@ -3,14 +3,13 @@ from st_gsheets_connection import GSheetsConnection
 import pandas as pd
 import urllib.parse
 
-# --- 1. CONFIGURATION ---
+# --- CONFIGURATION ---
 FARM_NAME = "Jayeone Farms"
 SECRET_KEY = "123890SKJNRREDDY"
-SHEET_URL = "https://docs.google.com/spreadsheets/d/1mnWUg74jdlwDT2w7nd05N7hOhXuOj0TlCYAsfUOgLvc/edit?usp=sharing"
 
 st.set_page_config(page_title=FARM_NAME, page_icon="🌱", layout="wide")
 
-# --- 2. PROFESSIONAL UI STYLING ---
+# --- UI STYLING ---
 st.markdown(f"""
     <style>
     .stButton>button {{ width: 100%; border-radius: 20px; background-color: #2e7d32; color: white; font-weight: bold; height: 3em; }}
@@ -20,46 +19,41 @@ st.markdown(f"""
     </style>
     """, unsafe_allow_html=True)
 
-# --- 3. DATA CONNECTION ---
+# --- SECURE DATA CONNECTION ---
 def load_data():
     try:
+        # This now automatically looks for the URL in your 'Secrets'
         conn = st.connection("gsheets", type=GSheetsConnection)
-        # Using the direct URL for connection
-        cat = conn.read(spreadsheet=SHEET_URL, worksheet="CATALOGUE")
-        settings = conn.read(spreadsheet=SHEET_URL, worksheet="SETTINGS")
+        cat = conn.read(worksheet="CATALOGUE")
+        settings = conn.read(worksheet="SETTINGS")
         return cat, settings
     except Exception as e:
-        st.error(f"Connection Error: {e}")
+        st.error(f"Waiting for Secret Handshake... {e}")
         return None, None
 
 df_cat, df_settings = load_data()
 
-# --- 4. THE GHOST SIDEBAR (Admin Access) ---
+# --- ADMIN SIDEBAR ---
 with st.sidebar:
     st.image("https://cdn-icons-png.flaticon.com/512/2153/2153067.png", width=100)
     st.title("Admin Access")
-    admin_key = st.text_input("Enter Secret Key", type="password")
+    admin_key = st.text_input("Security Key", type="password")
     
     if admin_key == SECRET_KEY:
-        st.success("Welcome, Founder")
-        st.subheader("System Health")
-        st.write("✅ Database Linked")
-        st.write("✅ WhatsApp Bridge Active")
+        st.success("Access Granted, Founder")
     else:
-        st.info("Quality Organic Produce | Anantapur")
+        st.info("Quality Organic Produce")
 
-# --- 5. MAIN CUSTOMER INTERFACE ---
+# --- CUSTOMER UI ---
 st.title(f"🌱 {FARM_NAME}")
-st.markdown("#### *Natural. Fresh. Fair. Direct from our farm to you.*")
 
 if df_cat is not None:
-    # Creating a 3-column grid for products
     cols = st.columns(3)
     cart = {}
 
     for idx, row in df_cat.iterrows():
-        # Using exact column names from your sheet
-        item_name = row['Item_Name']
+        # Mapping to your exact column names
+        item = row['Item_Name']
         price = row['Price']
         mkt_price = row['Market_Retail_Price']
         unit = row['Unit']
@@ -69,49 +63,37 @@ if df_cat is not None:
             st.markdown(f"""
             <div class="product-card">
                 <img src="{img}" style="width:100%; border-radius:10px; margin-bottom:10px;">
-                <h3>{item_name}</h3>
+                <h3>{item}</h3>
                 <p class="market-tag">Market: ₹{mkt_price}</p>
                 <p class="price-tag">Farm: ₹{price} / {unit}</p>
             </div>
             """, unsafe_allow_html=True)
             
-            qty = st.number_input(f"Qty for {item_name}", min_value=0, step=1, key=f"prod_{idx}")
+            qty = st.number_input("Qty", min_value=0, step=1, key=f"p_{idx}")
             if qty > 0:
-                cart[item_name] = {"qty": qty, "price": price, "unit": unit}
+                cart[item] = {"qty": qty, "price": price, "unit": unit}
 
-    # --- 6. CHECKOUT & WHATSAPP LOGIC ---
     if cart:
         st.divider()
-        st.subheader("🛒 Your Basket")
         total_bill = 0
-        summary_text = f"*New Order from {FARM_NAME}*\n---\n"
+        summary = f"*New Order: {FARM_NAME}*\n---\n"
         
         for item, details in cart.items():
             line_total = details['qty'] * details['price']
             total_bill += line_total
-            summary_text += f"• {item}: {details['qty']} {details['unit']} = ₹{line_total}\n"
+            summary += f"• {item}: {details['qty']} {details['unit']} = ₹{line_total}\n"
         
-        summary_text += f"\n*Grand Total: ₹{total_bill}*\n---\n_Thank you for supporting local farmers!_"
+        summary += f"\n*Total: ₹{total_bill}*"
+        st.write(f"### Grand Total: ₹{total_bill}")
         
-        st.write(f"### Total Amount: ₹{total_bill}")
+        # Get phone from SETTINGS tab (Row 1, Column 2)
+        wa_phone = str(df_settings.iloc[0, 1]) if df_settings is not None else "91"
         
-        # Pulling Phone from SETTINGS Row 1, Column 2
-        wa_phone = df_settings.iloc[0, 1] if df_settings is not None else "91XXXXXXXXXX"
-        
-        encoded_msg = urllib.parse.quote(summary_text)
-        wa_link = f"https://wa.me/{wa_phone}?text={encoded_msg}"
+        encoded_msg = urllib.parse.quote(summary)
+        wa_url = f"https://wa.me/{wa_phone}?text={encoded_msg}"
 
-        if st.button("🚀 Confirm Order on WhatsApp"):
+        if st.button("🚀 Order via WhatsApp"):
             st.balloons()
-            st.markdown(f'''
-                <a href="{wa_link}" target="_blank" style="text-decoration:none;">
-                    <div style="background-color:#25D366;color:white;padding:15px;border-radius:10px;text-align:center;font-weight:bold;font-size:1.1rem;">
-                        CLICK HERE TO SEND ORDER
-                    </div>
-                </a>
-            ''', unsafe_allow_html=True)
+            st.markdown(f'<a href="{wa_url}" target="_blank" style="text-decoration:none;"><div style="background-color:#25D366;color:white;padding:15px;border-radius:10px;text-align:center;font-weight:bold;">CONFIRM ON WHATSAPP</div></a>', unsafe_allow_html=True)
 else:
-    st.warning("Connecting to the farm database... please wait.")
-
-st.divider()
-st.caption("Powered by Triaiiag OS | Transparency in Agriculture")
+    st.info("Syncing with the Digital Fortress... please check your Streamlit Secrets.")
