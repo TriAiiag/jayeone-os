@@ -9,7 +9,8 @@ except ImportError:
 
 # --- CONFIGURATION ---
 FARM_NAME = "Jayeone Farms"
-SECRET_KEY = "123890SKJNRREDDY"
+# We pull it from the hidden vault:
+SECRET_KEY = st.secrets["SECRET_KEY"]
 
 st.set_page_config(page_title=FARM_NAME, page_icon="🌱")
 
