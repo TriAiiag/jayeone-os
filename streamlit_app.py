@@ -1,19 +1,11 @@
 import streamlit as st
 import pandas as pd
 
-# --- 1. SETUP & THEME ---
+# --- 1. SETUP ---
 FARM_NAME = "Jayeone Farms"
 st.set_page_config(page_title=FARM_NAME, page_icon="🌱", layout="wide")
 
-# Custom CSS to fix the Red color conflict and make it clean
-st.markdown("""
-    <style>
-    .stCheckbox { color: #2E7D32; } /* Changes checkbox text to Farm Green */
-    .stDataFrame { border: 1px solid #e6e9ef; border-radius: 10px; }
-    </style>
-    """, unsafe_allow_html=True)
-
-# --- 2. THE ENGINE ---
+# --- 2. ENGINE ---
 @st.cache_data(ttl=600)
 def fetch_data(sid, gid):
     url = f"https://docs.google.com/spreadsheets/d/{sid}/export?format=csv&gid={gid}"
@@ -36,32 +28,37 @@ try:
 
     if page == "Orders":
         st.subheader("📦 Incoming Orders")
-        df = fetch_data(sid, "0")
+        raw_df = fetch_data(sid, "0")
         
-        # ADDING INTERACTIVITY: The "Selection" checkbox
-        # This replaces the messy red highlight with a clean selection tool
-        edited_df = st.data_editor(
-            df,
+        # --- THE FIX: Create a real checkbox column from scratch ---
+        # This prevents the "cannot be interpreted as boolean" error
+        display_df = raw_df.copy()
+        display_df.insert(0, "Packed?", False) # Inserts a False (Checkbox) column at the start
+
+        st.data_editor(
+            display_df,
             column_config={
-                "Status": st.column_config.CheckboxColumn(
-                    "Pack Status",
-                    help="Check once item is packed",
+                "Packed?": st.column_config.CheckboxColumn(
+                    "Packed?",
+                    help="Check this when the order is ready",
                     default=False,
                 )
             },
-            disabled=["Order_ID", "Date", "Customer_Name", "Items"], # Stops accidental editing
-            width="stretch"
+            # We disable all other columns so the checkbox is the only thing you can click
+            disabled=[col for col in display_df.columns if col != "Packed?"],
+            width="stretch",
+            hide_index=True
         )
 
     elif page == "Catalogue":
         st.subheader("🥗 Product List & Pricing")
         df = fetch_data(sid, "1608295230")
-        st.dataframe(df, width="stretch")
+        st.dataframe(df, width="stretch", hide_index=True)
 
     elif page == "Stock Status":
         st.subheader("📉 Inventory Status")
         df = fetch_data(sid, "1277793309")
-        st.dataframe(df, width="stretch")
+        st.dataframe(df, width="stretch", hide_index=True)
 
 except Exception as e:
     st.error(f"System Error: {e}")
