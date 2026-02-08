@@ -7,8 +7,9 @@ from google.oauth2.service_account import Credentials
 FARM_NAME = "Jayeone Farms"
 st.set_page_config(page_title=FARM_NAME, page_icon="🌱", layout="wide")
 
-# --- 2. THE ENGINES ---
+# --- 2. DATA ENGINES ---
 def get_gspread_client():
+    # Pulls clean credentials from Secrets
     creds_dict = st.secrets["gspread_credentials"]
     scopes = ["https://www.googleapis.com/auth/spreadsheets"]
     creds = Credentials.from_service_account_info(creds_dict, scopes=scopes)
@@ -32,34 +33,34 @@ try:
         raw_df = fetch_data(sid, "0")
         
         # --- THE CLEANUP ENGINE ---
-        # 1. Strip hidden spaces from column names
-        raw_df.columns = raw_df.columns.str.strip()
-        # 2. Drop the redundant columns by name
-        display_df = raw_df.drop(columns=["Packed/Dispatched", "Status", "Timestamp"], errors='ignore')
-        # 3. Filter out empty rows
-        display_df = display_df[display_df.iloc[:, 0].notna()]
+        # 1. Removes empty 'None' rows from view
+        display_df = raw_df[raw_df.iloc[:, 0].notna()].copy()
+        
+        # 2. Hides the ghost columns
+        cols_to_drop = ["Packed/Dispatched", "Status", "Timestamp", "packed/dispatched"]
+        display_df = display_df.drop(columns=[c for c in cols_to_drop if c in display_df.columns], errors='ignore')
 
-        # INTERACTIVE EDITOR
+        # Interactive Data Editor
         edited_df = st.data_editor(display_df, width="stretch", hide_index=True)
 
         if st.button("💾 Save Changes to Digital Fortress"):
-            with st.spinner("Writing to Jayeone Cloud..."):
+            with st.spinner("Syncing with Jayeone Cloud..."):
                 client = get_gspread_client()
                 sh = client.open_by_key(sid)
-                # Matches the exact tab name in your sheet
+                # Opens the specific tab 'ORDERS'
                 worksheet = sh.worksheet("ORDERS") 
                 
-                # Update the sheet
+                # Overwrites the tab with your new data
                 worksheet.update([edited_df.columns.values.tolist()] + edited_df.values.tolist())
-                st.success("✅ Changes Saved to Google Sheets!")
+                st.success("✅ Records Successfully Updated!")
                 st.cache_data.clear()
 
     elif page == "Catalogue":
-        # Using the GID from your screenshot
+        # Pulls from GID 1608295230
         st.dataframe(fetch_data(sid, "1608295230"), width="stretch", hide_index=True)
 
     elif page == "Stock Status":
-        # Using the GID from your screenshot
+        # Pulls from GID 1277793309
         st.dataframe(fetch_data(sid, "1277793309"), width="stretch", hide_index=True)
 
 except Exception as e:
