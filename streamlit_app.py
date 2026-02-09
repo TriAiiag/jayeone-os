@@ -10,14 +10,19 @@ st.set_page_config(page_title="Jayeone Farms OS", layout="wide")
 # Your Sheet ID
 SHEET_ID = "1Wr7fZYZoMKLyTbpohUzYYqDPPWXH8IZVw-08PVEb5YQ"
 
-# --- 2. THE CLEANING ENGINE (Fixes Issue #3 & #4) ---
-def get_clean_df(spread, gid):
-    """Fetches data and sanitizes headers to remove duplicates like .1"""
-    raw_df = spread.sheet_to_df(index=None, gid=gid)
-    # Clean headers: remove hidden spaces and make strings
+# --- 2. THE CORRECTED CLEANING ENGINE ---
+def get_clean_df(spread, sheet_name):
+    """Fetches data by sheet name and sanitizes headers"""
+    # Use sheet name instead of gid for this library
+    raw_df = spread.sheet_to_df(index=None, sheet=sheet_name)
     raw_df.columns = [str(c).strip() for c in raw_df.columns]
-    # Drop duplicate columns (keeps the first 'Packed/Dispatched', drops the '.1')
     return raw_df.loc[:, ~raw_df.columns.duplicated()].copy()
+
+# --- 4. UPDATED MAIN APP LOGIC ---
+if page == "Orders Dashboard":
+    # Use the actual NAMES of your tabs in Google Sheets
+    orders_df = get_clean_df(spread, "Orders") 
+    stock_df = get_clean_df(spread, "STOCK") # Make sure this matches your tab name exactly!
 
 # --- 3. CONNECTION (Using your existing PEM/Secrets setup) ---
 def get_spread():
