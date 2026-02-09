@@ -1,93 +1,197 @@
 import streamlit as st
 import pandas as pd
-import gspread
-from google.oauth2.service_account import Credentials
+from google.oauth2 import service_account
+from gspread_pandas import Spread, Client
+import os
 
-# --- 1. CONFIG ---
-FARM_NAME = "Jayeone Farms OS"
-st.set_page_config(page_title=FARM_NAME, page_icon="🌱", layout="wide")
+# --- 1. SETTINGS & CONFIG ---
+st.set_page_config(page_title="Jayeone Farms OS", layout="wide")
 
-# --- 2. THE ENGINE ---
-def get_gspread_client():
-    creds_dict = st.secrets["gspread_credentials"]
-    scopes = ["https://www.googleapis.com/auth/spreadsheets"]
-    creds = Credentials.from_service_account_info(creds_dict, scopes=scopes)
-    return gspread.authorize(creds)
+# Your Sheet ID
+SHEET_ID = "1Wr7fZYZoMKLyTbpohUzYYqDPPWXH8IZVw-08PVEb5YQ"
 
-@st.cache_data(ttl=300)
-def fetch_data(sid, gid):
-    url = f"https://docs.google.com/spreadsheets/d/{sid}/export?format=csv&gid={gid}"
-    return pd.read_csv(url)
+# --- 2. THE CLEANING ENGINE (Fixes Issue #3 & #4) ---
+def get_clean_df(spread, gid):
+    """Fetches data and sanitizes headers to remove duplicates like .1"""
+    raw_df = spread.sheet_to_df(index=None, gid=gid)
+    # Clean headers: remove hidden spaces and make strings
+    raw_df.columns = [str(c).strip() for c in raw_df.columns]
+    # Drop duplicate columns (keeps the first 'Packed/Dispatched', drops the '.1')
+    return raw_df.loc[:, ~raw_df.columns.duplicated()].copy()
 
+# --- 3. CONNECTION (Using your existing PEM/Secrets setup) ---
+def get_spread():
+    # This assumes you have 'gcp_service_account' in your Streamlit Secrets
+    creds_dict = st.secrets["gcp_service_account"]
+    scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+    creds = service_account.Credentials.from_service_account_info(creds_dict, scopes=scope)
+    return Spread(SHEET_ID, creds=creds)
+
+# --- 4. MAIN APP LOGIC ---
 try:
-    sid = st.secrets["SHEET_ID"].strip()
-    st.sidebar.title("🚜 Jayeone Navigation")
-    page = st.sidebar.radio("Go to:", ["Orders Dashboard", "Catalogue", "Inventory"])
+    spread = get_spread()
+    
+    st.sidebar.title("🌿 Jayeone Farms")
+    page = st.sidebar.radio("Navigate", ["Orders Dashboard", "Inventory/Stock", "Daily Analytics"])
 
     if page == "Orders Dashboard":
-        raw_df = fetch_data(sid, "0")
-        raw_df.columns = raw_df.columns.str.strip()
-        df = raw_df[raw_df.iloc[:, 0].notna()].copy()
+        # Fetch Orders (GID 0) and Stock (GID 1277793309)
+        orders_df = get_clean_df(spread, "0")
+        stock_df = get_clean_df(spread, "1277793309")
 
-        # --- FEATURE 1: THE MORNING BRIEFING (Intelligence) ---
-        total_orders = len(df)
-        # Assuming 'Total_Price' or 'Amount' column exists; adjust name as needed
-        revenue_col = next((c for c in df.columns if 'Price' in c or 'Amount' in c), None)
-        total_revenue = df[revenue_col].sum() if revenue_col else 0
+        # --- 5. REVENUE RESTORER (Fixes Issue #2) ---
+        if 'Total' in orders_df.columns:
+            # Cleans ₹ and , then ignores text like "Thursd"
+            clean_rev = pd.to_numeric(orders_df['Total'].astype(str).str.replace('[\₹,]', '', regex=True), errors='coerce').fillna(0)
+            total_revenue = clean_rev.sum()
+        else:
+            total_revenue = 0
+
+        # --- 6. DASHBOARD METRICS ---
+        st.title("📦 Orders Management")
+        m1, m2, m3 = st.columns(3)
+        m1.metric("Live Orders", len(orders_df))
+        m2.metric("Est. Revenue", f"₹{total_revenue:,.2f}")
+        m3.metric("Stock Varieties", len(stock_df))
         
-        col1, col2, col3 = st.columns(3)
-        col1.metric("Total Orders", f"{total_orders}")
-        col2.metric("Est. Revenue", f"₹{total_revenue:,.2f}")
-        col3.metric("Status", "Operational")
-
         st.divider()
 
-        # --- FEATURE 2: ROUTE INTELLIGENCE (Filtering) ---
-        # Assuming 'City' or 'Location' column exists
-        city_col = next((c for c in df.columns if 'City' in c or 'Location' in c), None)
-        if city_col:
-            cities = ["All Locations"] + sorted(df[city_col].unique().tolist())
-            selected_city = st.selectbox("Filter by Delivery Route:", cities)
-            if selected_city != "All Locations":
-                df = df[df[city_col] == selected_city]
+        # --- 7. SEARCHABLE INVENTORY LINK (Fixes Issue #1) ---
+        # Gets the unique list of vegetables from your Stock tab
+        veggie_options = stock_df['Item_Name'].unique().tolist() if 'Item_Name' in stock_df.columns else []
 
-        # --- FEATURE 3: MOBILE TICK-MARKS ---
-        if 'Packed/Dispatched' in df.columns:
-            df['Packed/Dispatched'] = df['Packed/Dispatched'].apply(
-                lambda x: True if str(x).upper() == "TRUE" else False
-            )
+        # --- 8. PROFESSIONAL VIEW (Fixes Issue #5) ---
+        # We only show the columns needed for packing/delivery
+        cols_to_show = ['Order_ID', 'Customer', 'Items', 'City', 'Total', 'Packed/Dispatched']
+        display_df = orders_df[[c for c in cols_to_show if c in orders_df.columns]]
 
-        # Drop technical clutter
-        display_df = df.drop(columns=["Status", "Timestamp"], errors='ignore')
-
+        st.subheader("Current Order Queue")
         edited_df = st.data_editor(
             display_df,
             column_config={
-                "Packed/Dispatched": st.column_config.CheckboxColumn("Packed?", default=False)
+                "Items": st.column_config.SelectboxColumn(
+                    "Select Item",
+                    options=veggie_options,
+                    help="Search from farm harvest list"
+                ),
+                "Packed/Dispatched": st.column_config.CheckboxColumn("Packed?"),
+                "Total": st.column_config.NumberColumn("Amount (₹)", format="₹%d")
             },
-            disabled=[col for col in display_df.columns if col != "Packed/Dispatched"],
-            width="stretch",
-            hide_index=True
+            hide_index=True,
+            use_container_width=True,
+            key="order_editor"
         )
 
-        if st.button("💾 Sync Packing Progress"):
-            with st.spinner("Updating Digital Fortress..."):
-                client = get_gspread_client()
-                sh = client.open_by_key(sid)
-                worksheet = sh.worksheet("ORDERS")
-                # Clean NaNs for JSON compliance before writing
-                clean_df = edited_df.fillna("")
-                data_to_save = [clean_df.columns.values.tolist()] + clean_df.values.tolist()
-                worksheet.update(data_to_save)
-                st.success("✅ Records Synced!")
-                st.cache_data.clear()
+        if st.button("🚀 Sync to Digital Fortress"):
+            with st.spinner("Updating Farm Records..."):
+                # Write back to GID 0
+                spread.df_to_sheet(edited_df, index=False, sheet="Orders", replace=False)
+                st.success("Synchronized! Google Sheets is now updated.")
 
-    # (Catalogue and Inventory tabs remain as simple dataframes for now)
-    elif page == "Catalogue":
-        st.dataframe(fetch_data(sid, "1608295230").dropna(how='all'), use_container_width=True, hide_index=True)
-
-    elif page == "Inventory":
-        st.dataframe(fetch_data(sid, "1277793309").dropna(how='all'), use_container_width=True, hide_index=True)
+    elif page == "Inventory/Stock":
+        st.title("🚜 Farm Stock")
+        stock_df = get_clean_df(spread, "1277793309")
+        st.dataframe(stock_df, use_container_width=True)
+        # You can add a separate editor here later for your brother to update stock
 
 except Exception as e:
-    st.error(f"System Error: {e}")
+    st.error(f"System Connection Error: {e}")
+    st.info("Check your Google Service Account Secrets and Sheet ID.")import streamlit as st
+import pandas as pd
+from google.oauth2 import service_account
+from gspread_pandas import Spread, Client
+import os
+
+# --- 1. SETTINGS & CONFIG ---
+st.set_page_config(page_title="Jayeone Farms OS", layout="wide")
+
+# Your Sheet ID
+SHEET_ID = "1Wr7fZYZoMKLyTbpohUzYYqDPPWXH8IZVw-08PVEb5YQ"
+
+# --- 2. THE CLEANING ENGINE (Fixes Issue #3 & #4) ---
+def get_clean_df(spread, gid):
+    """Fetches data and sanitizes headers to remove duplicates like .1"""
+    raw_df = spread.sheet_to_df(index=None, gid=gid)
+    # Clean headers: remove hidden spaces and make strings
+    raw_df.columns = [str(c).strip() for c in raw_df.columns]
+    # Drop duplicate columns (keeps the first 'Packed/Dispatched', drops the '.1')
+    return raw_df.loc[:, ~raw_df.columns.duplicated()].copy()
+
+# --- 3. CONNECTION (Using your existing PEM/Secrets setup) ---
+def get_spread():
+    # This assumes you have 'gcp_service_account' in your Streamlit Secrets
+    creds_dict = st.secrets["gcp_service_account"]
+    scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+    creds = service_account.Credentials.from_service_account_info(creds_dict, scopes=scope)
+    return Spread(SHEET_ID, creds=creds)
+
+# --- 4. MAIN APP LOGIC ---
+try:
+    spread = get_spread()
+    
+    st.sidebar.title("🌿 Jayeone Farms")
+    page = st.sidebar.radio("Navigate", ["Orders Dashboard", "Inventory/Stock", "Daily Analytics"])
+
+    if page == "Orders Dashboard":
+        # Fetch Orders (GID 0) and Stock (GID 1277793309)
+        orders_df = get_clean_df(spread, "0")
+        stock_df = get_clean_df(spread, "1277793309")
+
+        # --- 5. REVENUE RESTORER (Fixes Issue #2) ---
+        if 'Total' in orders_df.columns:
+            # Cleans ₹ and , then ignores text like "Thursd"
+            clean_rev = pd.to_numeric(orders_df['Total'].astype(str).str.replace('[\₹,]', '', regex=True), errors='coerce').fillna(0)
+            total_revenue = clean_rev.sum()
+        else:
+            total_revenue = 0
+
+        # --- 6. DASHBOARD METRICS ---
+        st.title("📦 Orders Management")
+        m1, m2, m3 = st.columns(3)
+        m1.metric("Live Orders", len(orders_df))
+        m2.metric("Est. Revenue", f"₹{total_revenue:,.2f}")
+        m3.metric("Stock Varieties", len(stock_df))
+        
+        st.divider()
+
+        # --- 7. SEARCHABLE INVENTORY LINK (Fixes Issue #1) ---
+        # Gets the unique list of vegetables from your Stock tab
+        veggie_options = stock_df['Item_Name'].unique().tolist() if 'Item_Name' in stock_df.columns else []
+
+        # --- 8. PROFESSIONAL VIEW (Fixes Issue #5) ---
+        # We only show the columns needed for packing/delivery
+        cols_to_show = ['Order_ID', 'Customer', 'Items', 'City', 'Total', 'Packed/Dispatched']
+        display_df = orders_df[[c for c in cols_to_show if c in orders_df.columns]]
+
+        st.subheader("Current Order Queue")
+        edited_df = st.data_editor(
+            display_df,
+            column_config={
+                "Items": st.column_config.SelectboxColumn(
+                    "Select Item",
+                    options=veggie_options,
+                    help="Search from farm harvest list"
+                ),
+                "Packed/Dispatched": st.column_config.CheckboxColumn("Packed?"),
+                "Total": st.column_config.NumberColumn("Amount (₹)", format="₹%d")
+            },
+            hide_index=True,
+            use_container_width=True,
+            key="order_editor"
+        )
+
+        if st.button("🚀 Sync to Digital Fortress"):
+            with st.spinner("Updating Farm Records..."):
+                # Write back to GID 0
+                spread.df_to_sheet(edited_df, index=False, sheet="Orders", replace=False)
+                st.success("Synchronized! Google Sheets is now updated.")
+
+    elif page == "Inventory/Stock":
+        st.title("🚜 Farm Stock")
+        stock_df = get_clean_df(spread, "1277793309")
+        st.dataframe(stock_df, use_container_width=True)
+        # You can add a separate editor here later for your brother to update stock
+
+except Exception as e:
+    st.error(f"System Connection Error: {e}")
+    st.info("Check your Google Service Account Secrets and Sheet ID.")
